@@ -1,0 +1,14 @@
+node_modules/
+*.log
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+.git/
+.gitignore
+.npmignore

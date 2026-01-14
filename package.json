@@ -1,0 +1,44 @@
+{
+  "name": "git-merge-into",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "git",
+    "merge",
+    "branch",
+    "worktree",
+    "checkout",
+    "cli",
+    "tool"
+  ],
+  "author": "Eric Yang",
+  "license": "MIT",
+  "description": "A simple tool to merge git branches into a single branch",
+  "bin": {
+    "git-merge-into": "index.js"
+  },
+  "files": [
+    "index.js",
+    "package.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=12.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/git-merge-into.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/git-merge-into/issues"
+  },
+  "homepage": "https://github.com/your-username/git-merge-into#readme",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^9.4.1",
+    "inquirer": "^8.2.5"
+  }
+}
