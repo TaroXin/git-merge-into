@@ -31,12 +31,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-username/git-merge-to.git"
+    "url": "git+https://github.com/TaroXin/git-merge-into.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/git-merge-to/issues"
+    "url": "https://github.com/TaroXin/git-merge-into/issues"
   },
-  "homepage": "https://github.com/your-username/git-merge-to#readme",
+  "homepage": "https://github.com/TaroXin/git-merge-into",
   "dependencies": {
     "chalk": "^4.1.2",
     "commander": "^9.4.1",
