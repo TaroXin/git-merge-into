@@ -12,7 +12,7 @@ const packageJson = require('./package.json');
 
 // 解析命令行参数
 program
-  .name('git-merge-into')
+  .name('git-merge-to')
   .description(packageJson.description)
   .version(packageJson.version, '-v, --version', '显示版本号')
   .option('-s, --strategy <method>', '合并方式: worktree 或 checkout (默认: worktree)', 'worktree')
