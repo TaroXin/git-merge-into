@@ -111,7 +111,7 @@ Thumbs.db
 *.sublime-project
 *.sublime-workspace
 
-# Lock files (optional - uncomment if you want to ignore them)
-# package-lock.json
-# yarn.lock
-# pnpm-lock.yaml
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
