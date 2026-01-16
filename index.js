@@ -127,6 +127,138 @@ function sanitizeBranchName(branchName) {
   return branchName.replace(/[\/\\:*?"<>|]/g, '-');
 }
 
+// 检查是否正在进行合并
+function isMerging() {
+  // 使用当前工作目录来检查，这样可以适配 worktree 模式
+  const result = execGit('git rev-parse --git-dir', { silent: true });
+  if (!result.success) {
+    return false;
+  }
+  const gitDir = path.resolve(result.output.trim());
+  const mergeHeadPath = path.join(gitDir, 'MERGE_HEAD');
+  return fs.existsSync(mergeHeadPath);
+}
+
+// 检查是否有未解决的冲突
+function hasUnresolvedConflicts() {
+  const statusResult = execGit('git status --porcelain', { silent: true });
+  if (!statusResult.success) {
+    return true; // 如果无法获取状态，假设有冲突
+  }
+
+  const output = statusResult.output.trim();
+  if (!output) {
+    return false; // 没有输出，说明没有冲突
+  }
+
+  // 检查是否有冲突标记（UU, AA, DD 等）
+  // UU = 双方都修改且未合并
+  // AA = 双方都添加且未合并
+  // DD = 双方都删除且未合并
+  // AU, UA, DU, UD 等也是冲突状态
+  const conflictPattern = /^(UU|AA|DD|AU|UA|DU|UD)/m;
+  return conflictPattern.test(output);
+}
+
+// 检查冲突是否已解决（已暂存）
+function isConflictResolved() {
+  // 如果还在合并中，检查是否有冲突标记
+  if (!isMerging()) {
+    return true; // 不在合并中，说明合并已完成或已中止
+  }
+
+  // 检查是否还有未解决的冲突
+  if (hasUnresolvedConflicts()) {
+    return false; // 还有冲突标记，说明未解决
+  }
+
+  // 检查是否有已暂存的更改（用户执行了 git add .）
+  const statusResult = execGit('git diff --cached --name-only', { silent: true });
+  if (statusResult.success && statusResult.output.trim()) {
+    // 有已暂存的更改，说明用户已经解决了冲突并暂存
+    return true;
+  }
+
+  // 检查工作区状态
+  const statusResult2 = execGit('git status --porcelain', { silent: true });
+  if (!statusResult2.success) {
+    return false;
+  }
+
+  const output = statusResult2.output.trim();
+  if (!output) {
+    // 工作区完全干净，可能用户已经提交了
+    return !isMerging(); // 如果不在合并中，说明已解决
+  }
+
+  // 检查是否所有更改都已暂存（没有未暂存的冲突文件）
+  const lines = output.split('\n').filter(line => line.trim());
+  // 如果所有行都是已暂存状态（第一个字符不是空格），说明冲突已解决
+  return lines.every(line => {
+    const status = line.substring(0, 2);
+    // 已暂存状态：第一个字符是 M, A, D, R, C 等，不是空格
+    // 未跟踪文件（??）不影响合并
+    return status[0] !== ' ' || status === '??';
+  });
+}
+
+// 等待用户解决冲突
+async function waitForConflictResolution() {
+  console.log(chalk.yellow('\n检测到合并冲突，等待解决冲突...'));
+  console.log(chalk.blue('请解决冲突后，执行以下命令:'));
+  console.log(chalk.blue('  git add .'));
+  console.log(chalk.blue('然后程序将自动继续执行后续步骤'));
+  console.log(chalk.gray('(程序正在等待，每2秒检查一次冲突状态...)\n'));
+
+  // 轮询检查冲突是否已解决
+  const checkInterval = 2000; // 每2秒检查一次
+  const maxWaitTime = 3600000; // 最多等待1小时
+  const startTime = Date.now();
+  let checkCount = 0;
+
+  return new Promise((resolve, reject) => {
+    const checkIntervalId = setInterval(() => {
+      checkCount++;
+
+      // 检查是否还在合并中
+      if (!isMerging()) {
+        clearInterval(checkIntervalId);
+        // 合并可能被中止了或已完成
+        const statusResult = execGit('git status --porcelain', { silent: true });
+        if (statusResult.success && !statusResult.output.trim()) {
+          // 工作区干净，可能用户中止了合并
+          reject(new Error('合并已中止'));
+        } else {
+          // 可能用户手动完成了合并
+          resolve();
+        }
+        return;
+      }
+
+      // 检查冲突是否已解决
+      if (isConflictResolved()) {
+        clearInterval(checkIntervalId);
+        console.log(chalk.green('\n✓ 检测到冲突已解决，继续执行后续步骤...\n'));
+        resolve();
+        return;
+      }
+
+      // 每10次检查（20秒）显示一次等待提示
+      if (checkCount % 10 === 0) {
+        const elapsedMinutes = Math.floor((Date.now() - startTime) / 60000);
+        process.stdout.write(chalk.gray(`\r等待中... (已等待 ${elapsedMinutes} 分钟)`));
+      }
+
+      // 检查是否超时
+      if (Date.now() - startTime > maxWaitTime) {
+        clearInterval(checkIntervalId);
+        reject(new Error('等待冲突解决超时（已等待1小时）'));
+        return;
+      }
+    }, checkInterval);
+  });
+}
+
 // worktree 模式合并
 async function mergeWithWorktree(currentBranch, targetBranch) {
   console.log(chalk.blue(`\n使用 worktree 模式合并 ${currentBranch} 到 ${targetBranch}\n`));
@@ -177,18 +309,46 @@ async function mergeWithWorktree(currentBranch, targetBranch) {
     process.chdir(worktreePath);
     console.log(chalk.yellow(`切换到 worktree 目录: ${worktreePath}`));
 
+    // 拉取最新代码
+    console.log(chalk.yellow(`拉取目标分支最新代码`));
+    const pullResult = execGit(`git pull`);
+    if (!pullResult.success) {
+      throw new Error('拉取最新代码失败');
+    }
+
     // 合并当前分支
     console.log(chalk.yellow(`合并分支 ${currentBranch} 到 ${targetBranch}`));
     const mergeResult = execGit(`git merge ${currentBranch} --no-edit`);
     if (!mergeResult.success) {
-      console.error(chalk.red(`\n合并失败，请手动解决冲突后继续`));
       console.log(chalk.blue(`\nWorktree 位置: ${worktreePath}`));
-      console.log(chalk.blue(`解决冲突后，请手动执行:`));
-      console.log(chalk.blue(`  cd "${worktreePath}"`));
-      console.log(chalk.blue(`  git push`));
-      console.log(chalk.blue(`  cd "${gitRoot}"`));
-      console.log(chalk.blue(`  git worktree remove "${worktreePath}" --force`));
-      process.exit(1);
+
+      // 等待用户解决冲突
+      try {
+        await waitForConflictResolution();
+      } catch (error) {
+        console.error(chalk.red(`\n错误: ${error.message}`));
+        console.log(chalk.blue(`\n请手动解决冲突后，执行以下命令:`));
+        console.log(chalk.blue(`  cd "${worktreePath}"`));
+        console.log(chalk.blue(`  git add .`));
+        console.log(chalk.blue(`  git commit`));
+        console.log(chalk.blue(`  git push`));
+        console.log(chalk.blue(`  cd "${gitRoot}"`));
+        console.log(chalk.blue(`  git worktree remove "${worktreePath}" --force`));
+        process.exit(1);
+      }
+
+      // 冲突已解决，检查是否需要提交
+      if (isMerging()) {
+        // 如果还在合并中，说明需要提交
+        console.log(chalk.yellow(`提交合并`));
+        const commitResult = execGit(`git commit --no-edit`);
+        if (!commitResult.success) {
+          throw new Error('提交合并失败');
+        }
+      } else {
+        // 如果不在合并中，说明用户可能已经手动提交了
+        console.log(chalk.green(`✓ 合并已提交`));
+      }
     }
 
     // 推送
@@ -247,17 +407,44 @@ async function mergeWithCheckout(currentBranch, targetBranch) {
       throw new Error(`切换到分支 ${targetBranch} 失败`);
     }
 
+    // 拉取最新代码
+    console.log(chalk.yellow(`拉取目标分支最新代码`));
+    const pullResult = execGit(`git pull`);
+    if (!pullResult.success) {
+      throw new Error('拉取最新代码失败');
+    }
+
     // 合并当前分支
     console.log(chalk.yellow(`合并分支 ${currentBranch} 到 ${targetBranch}`));
     const mergeResult = execGit(`git merge ${currentBranch} --no-edit`);
     if (!mergeResult.success) {
-      console.error(chalk.red(`\n合并失败，检测到冲突`));
-      console.log(chalk.blue(`\n请解决冲突后，执行以下命令继续:`));
-      console.log(chalk.blue(`  git add .`));
-      console.log(chalk.blue(`  git commit`));
-      console.log(chalk.blue(`  git push`));
-      console.log(chalk.blue(`  git checkout ${currentBranch}`));
-      process.exit(1);
+      // 等待用户解决冲突
+      try {
+        await waitForConflictResolution();
+      } catch (error) {
+        console.error(chalk.red(`\n错误: ${error.message}`));
+        console.log(chalk.blue(`\n请手动解决冲突后，执行以下命令继续:`));
+        console.log(chalk.blue(`  git add .`));
+        console.log(chalk.blue(`  git commit`));
+        console.log(chalk.blue(`  git push`));
+        console.log(chalk.blue(`  git checkout ${currentBranch}`));
+        // 尝试切换回原分支
+        execGit(`git checkout ${currentBranch}`, { silent: true });
+        process.exit(1);
+      }
+
+      // 冲突已解决，检查是否需要提交
+      if (isMerging()) {
+        // 如果还在合并中，说明需要提交
+        console.log(chalk.yellow(`提交合并`));
+        const commitResult = execGit(`git commit --no-edit`);
+        if (!commitResult.success) {
+          throw new Error('提交合并失败');
+        }
+      } else {
+        // 如果不在合并中，说明用户可能已经手动提交了
+        console.log(chalk.green(`✓ 合并已提交`));
+      }
     }
 
     // 推送
